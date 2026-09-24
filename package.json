@@ -11,24 +11,37 @@
     "build:firefox": "wxt build -b firefox",
     "zip": "wxt zip",
     "zip:firefox": "wxt zip -b firefox",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "compile": "tsc --noEmit",
     "postinstall": "wxt prepare"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
+    "@soundtouchjs/audio-worklet": "^1.0.8",
+    "idb-keyval": "^6.2.2",
+    "lucide-react": "^0.575.0",
+    "mark.js": "^8.11.1",
     "react": "^19.2.3",
-    "react-dom": "^19.2.3"
+    "react-dom": "^19.2.3",
+    "sbd": "^1.0.19",
+    "wavefile": "^11.0.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.18",
+    "@testing-library/react": "^16.3.2",
+    "@types/mark.js": "^8.11.12",
     "@types/mozilla-readability": "^0.2.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
+    "@types/sbd": "^1.0.5",
     "@wxt-dev/module-react": "^1.1.5",
     "chrome-types": "^0.1.415",
+    "jsdom": "^28.1.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.18",
     "typescript": "^5.9.3",
+    "vitest": "^4.0.18",
     "wxt": "^0.20.6"
   }
 }

@@ -1,5 +1,5 @@
 import ReactDOM from "react-dom/client";
-import { FloatingWidget } from "./FloatingWidget";
+import { ReaderPlayerRoot } from "./ReaderPlayerRoot";
 
 export default defineContentScript({
   matches: ["<all_urls>"],
@@ -12,7 +12,7 @@ export default defineContentScript({
       anchor: "body",
       onMount: (container) => {
         const root = ReactDOM.createRoot(container);
-        root.render(<FloatingWidget />);
+        root.render(<ReaderPlayerRoot />);
         return root;
       },
       onRemove: (root) => {

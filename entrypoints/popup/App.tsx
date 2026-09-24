@@ -1,40 +1,106 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
+  addExcludedSite,
   getApiKey,
-  setApiKey,
-  getVoice,
-  setVoice,
+  getAudioCacheBudgetMb,
+  getExcludedSites,
+  getPlaybackEngine,
+  getPlayerMode,
+  getPlayerVisible,
   getSpeed,
+  getVoice,
+  normalizeSiteInput,
+  removeExcludedSite,
+  setApiKey,
+  setPlaybackEngine,
+  setPlayerMode,
+  setPlayerVisible,
   setSpeed,
+  setVoice,
 } from "@/lib/storage";
+import type { PlaybackEngine } from "@/lib/storage";
 import { validateApiKey, VOICES } from "@/lib/deepgram";
+import { clearAudioCache, getAudioCacheStats } from "@/lib/cache";
 
 type View = "setup" | "settings";
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 function App() {
   const [view, setView] = useState<View>("setup");
   const [apiKey, setApiKeyState] = useState("");
-  const [voice, setVoiceState] = useState("aura-asteria-en");
+  const [voice, setVoiceState] = useState("aura-2-thalia-en");
   const [speed, setSpeedState] = useState(1);
+  const [playbackEngine, setPlaybackEngineState] = useState<PlaybackEngine>("stable");
+  const [playerMode, setPlayerModeState] = useState<"docked" | "floating">("docked");
+  const [playerVisible, setPlayerVisibleState] = useState(true);
+  const [budgetMb, setBudgetMb] = useState(250);
+  const [cacheBytes, setCacheBytes] = useState(0);
+  const [cacheEntries, setCacheEntries] = useState(0);
   const [validating, setValidating] = useState(false);
+  const [clearingCache, setClearingCache] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [excludedSites, setExcludedSites] = useState<string[]>([]);
+  const [excludeInput, setExcludeInput] = useState("");
+  const [excludeError, setExcludeError] = useState<string | null>(null);
+
+  const refreshCacheStats = async (currentBudgetMb: number) => {
+    const stats = await getAudioCacheStats(currentBudgetMb);
+    setCacheBytes(stats.totalBytes);
+    setCacheEntries(stats.totalEntries);
+  };
 
   useEffect(() => {
     async function load() {
-      const key = await getApiKey();
-      const savedVoice = await getVoice();
-      const savedSpeed = await getSpeed();
+      const [
+        key,
+        savedVoice,
+        savedSpeed,
+        savedEngine,
+        savedMode,
+        savedVisible,
+        savedBudget,
+        savedExcludedSites,
+      ] = await Promise.all([
+        getApiKey(),
+        getVoice(),
+        getSpeed(),
+        getPlaybackEngine(),
+        getPlayerMode(),
+        getPlayerVisible(),
+        getAudioCacheBudgetMb(),
+        getExcludedSites(),
+      ]);
 
       if (key) {
         setApiKeyState(key);
         setView("settings");
       }
+
       setVoiceState(savedVoice);
       setSpeedState(savedSpeed);
+      setPlaybackEngineState(savedEngine);
+      setPlayerModeState(savedMode);
+      setPlayerVisibleState(savedVisible);
+      setBudgetMb(savedBudget);
+      setExcludedSites(savedExcludedSites);
+
+      await refreshCacheStats(savedBudget);
     }
-    load();
+
+    void load();
   }, []);
+
+  const flashSaved = () => {
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
+  };
 
   const handleSaveKey = async () => {
     if (!apiKey.trim()) {
@@ -50,8 +116,7 @@ function App() {
     if (valid) {
       await setApiKey(apiKey.trim());
       setView("settings");
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      flashSaved();
     } else {
       setError("Invalid API key. Please check and try again.");
     }
@@ -62,15 +127,39 @@ function App() {
   const handleVoiceChange = async (newVoice: string) => {
     setVoiceState(newVoice);
     await setVoice(newVoice);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    flashSaved();
   };
 
   const handleSpeedChange = async (newSpeed: number) => {
     setSpeedState(newSpeed);
     await setSpeed(newSpeed);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    flashSaved();
+  };
+
+  const handleEngineChange = async (engine: PlaybackEngine) => {
+    setPlaybackEngineState(engine);
+    await setPlaybackEngine(engine);
+    flashSaved();
+  };
+
+  const handleModeChange = async (mode: "docked" | "floating") => {
+    setPlayerModeState(mode);
+    await setPlayerMode(mode);
+    flashSaved();
+  };
+
+  const handleVisibleChange = async (nextVisible: boolean) => {
+    setPlayerVisibleState(nextVisible);
+    await setPlayerVisible(nextVisible);
+    flashSaved();
+  };
+
+  const handleClearCache = async () => {
+    setClearingCache(true);
+    await clearAudioCache();
+    await refreshCacheStats(budgetMb);
+    setClearingCache(false);
+    flashSaved();
   };
 
   const handleRemoveKey = async () => {
@@ -79,37 +168,58 @@ function App() {
     setView("setup");
   };
 
+  const handleAddExcludedSite = async () => {
+    const normalized = normalizeSiteInput(excludeInput);
+    if (!normalized) {
+      setExcludeError("Enter a valid hostname or URL");
+      return;
+    }
+
+    setExcludeError(null);
+    const next = await addExcludedSite(normalized);
+    setExcludedSites(next);
+    setExcludeInput("");
+    flashSaved();
+  };
+
+  const handleRemoveExcludedSite = async (hostname: string) => {
+    const next = await removeExcludedSite(hostname);
+    setExcludedSites(next);
+    flashSaved();
+  };
+
   if (view === "setup") {
     return (
-      <div className="p-4 w-80">
-        <h1 className="text-lg font-semibold mb-2">PageReader</h1>
-        <p className="text-sm text-gray-400 mb-4">
-          Read any webpage aloud with AI voices
-        </p>
-
-        <div className="space-y-3">
+      <div className="popup-shell w-[360px] p-4">
+        <div className="popup-card popup-card--hero space-y-3">
           <div>
-            <label className="block text-sm text-gray-300 mb-1">
+            <h1 className="text-lg font-bold tracking-tight text-slate-50">PageReader</h1>
+            <p className="mt-1 text-sm text-slate-300">
+              Turn any article into speech with clean controls and smart caching.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <label htmlFor="api-key-input" className="popup-label">
               DeepGram API Key
             </label>
             <input
+              id="api-key-input"
               type="password"
               value={apiKey}
               onChange={(e) => setApiKeyState(e.target.value)}
               placeholder="Enter your API key"
-              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-indigo-500"
-              onKeyDown={(e) => e.key === "Enter" && handleSaveKey()}
+              className="popup-input"
+              onKeyDown={(e) => e.key === "Enter" && void handleSaveKey()}
             />
+            {error && <p className="popup-error">{error}</p>}
           </div>
 
-          {error && (
-            <p className="text-sm text-red-400">{error}</p>
-          )}
-
           <button
-            onClick={handleSaveKey}
+            type="button"
+            onClick={() => void handleSaveKey()}
             disabled={validating}
-            className="w-full py-2 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 rounded-lg text-sm font-medium transition-colors"
+            className="popup-primary-button"
           >
             {validating ? "Validating..." : "Save API Key"}
           </button>
@@ -118,7 +228,7 @@ function App() {
             href="https://console.deepgram.com/signup"
             target="_blank"
             rel="noopener noreferrer"
-            className="block text-center text-sm text-indigo-400 hover:text-indigo-300"
+            className="popup-link"
           >
             Get a free API key at deepgram.com →
           </a>
@@ -128,84 +238,192 @@ function App() {
   }
 
   return (
-    <div className="p-4 w-80">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-lg font-semibold">PageReader</h1>
-        {saved && (
-          <span className="text-xs text-green-400">Saved ✓</span>
-        )}
+    <div className="popup-shell w-[360px] p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h1 className="text-lg font-bold tracking-tight text-slate-50">PageReader</h1>
+        <span className={`text-xs font-medium ${saved ? "text-emerald-300" : "text-slate-500"}`}>
+          {saved ? "Saved ✓" : "Ready"}
+        </span>
       </div>
 
-      <div className="space-y-4">
-        {/* Voice Selection */}
-        <div>
-          <label className="block text-sm text-gray-300 mb-1">Voice</label>
-          <select
-            value={voice}
-            onChange={(e) => handleVoiceChange(e.target.value)}
-            className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-indigo-500"
-          >
-            <optgroup label="Aura (Standard)">
-              {VOICES.filter((v) => v.tier === "aura").map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.name}
-                </option>
-              ))}
-            </optgroup>
-            <optgroup label="Aura 2 (Enhanced)">
-              {VOICES.filter((v) => v.tier === "aura-2").map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.name}
-                </option>
-              ))}
-            </optgroup>
-          </select>
-        </div>
-
-        {/* Speed Selection */}
-        <div>
-          <label className="block text-sm text-gray-300 mb-1">
-            Default Speed: {speed}x
-          </label>
-          <input
-            type="range"
-            min="0.5"
-            max="2"
-            step="0.25"
-            value={speed}
-            onChange={(e) => handleSpeedChange(parseFloat(e.target.value))}
-            className="w-full accent-indigo-500"
-          />
-          <div className="flex justify-between text-xs text-gray-500">
-            <span>0.5x</span>
-            <span>1x</span>
-            <span>2x</span>
+      <div className="space-y-3">
+        <section className="popup-card space-y-3">
+          <div>
+            <h2 className="popup-section-title">Playback</h2>
+            <p className="popup-section-subtitle">Set default voice, speed, engine, and player mode.</p>
           </div>
-        </div>
 
-        {/* API Key Management */}
-        <div className="pt-2 border-t border-gray-700">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-gray-400">
-              API Key: ••••{apiKey.slice(-4)}
-            </span>
-            <button
-              onClick={handleRemoveKey}
-              className="text-xs text-red-400 hover:text-red-300"
+          <div className="space-y-1.5">
+            <label htmlFor="voice-select" className="popup-label">
+              Voice
+            </label>
+            <select
+              id="voice-select"
+              value={voice}
+              onChange={(e) => void handleVoiceChange(e.target.value)}
+              className="popup-select"
             >
-              Remove
+              <optgroup label="Aura (Standard)">
+                {VOICES.filter((v) => v.tier === "aura").map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="Aura 2 (Enhanced)">
+                {VOICES.filter((v) => v.tier === "aura-2").map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="speed-range" className="popup-label">
+              Default Speed: {speed}x
+            </label>
+            <input
+              id="speed-range"
+              type="range"
+              min="0.5"
+              max="2"
+              step="0.25"
+              value={speed}
+              onChange={(e) => void handleSpeedChange(parseFloat(e.target.value))}
+              className="w-full accent-sky-400"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1.5">
+              <label htmlFor="engine-select" className="popup-label">
+                Engine
+              </label>
+              <select
+                id="engine-select"
+                value={playbackEngine}
+                onChange={(e) => void handleEngineChange(e.target.value as PlaybackEngine)}
+                className="popup-select"
+              >
+                <option value="stable">Cached replay</option>
+                <option value="progressive">Streaming</option>
+              </select>
+            </div>
+
+            <div className="space-y-1.5">
+              <label htmlFor="mode-select" className="popup-label">
+                Player Mode
+              </label>
+              <select
+                id="mode-select"
+                value={playerMode}
+                onChange={(e) => void handleModeChange(e.target.value as "docked" | "floating")}
+                className="popup-select"
+              >
+                <option value="docked">Docked</option>
+                <option value="floating">Floating</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <section className="popup-card space-y-3">
+          <div>
+            <h2 className="popup-section-title">Visibility & exclusions</h2>
+            <p className="popup-section-subtitle">Control default visibility and site exclusions.</p>
+          </div>
+
+          <div className="flex items-center justify-between rounded-lg border border-slate-700/80 bg-slate-900/55 px-3 py-2">
+            <span className="text-sm text-slate-300">Player visible by default</span>
+            <button
+              type="button"
+              onClick={() => void handleVisibleChange(!playerVisible)}
+              className={`rounded px-2 py-1 text-xs font-semibold ${
+                playerVisible
+                  ? "bg-sky-500 text-slate-950 hover:bg-sky-400"
+                  : "bg-slate-700 text-slate-100 hover:bg-slate-600"
+              }`}
+            >
+              {playerVisible ? "On" : "Off"}
             </button>
           </div>
-        </div>
 
-        {/* Usage Instructions */}
-        <div className="pt-2 border-t border-gray-700">
-          <p className="text-xs text-gray-500">
-            <strong>Usage:</strong> A floating widget appears on every page.
-            Click play to read the article content aloud.
-            Press Space to play/pause.
-          </p>
-        </div>
+          <div className="space-y-1.5">
+            <div className="popup-label">Site exclusions</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={excludeInput}
+                onChange={(e) => {
+                  setExcludeInput(e.target.value);
+                  if (excludeError) setExcludeError(null);
+                }}
+                onKeyDown={(e) => e.key === "Enter" && void handleAddExcludedSite()}
+                placeholder="example.com or URL"
+                className="popup-input"
+              />
+              <button type="button" onClick={() => void handleAddExcludedSite()} className="popup-secondary-button">
+                Add
+              </button>
+            </div>
+            {excludeError && <p className="popup-error">{excludeError}</p>}
+
+            {excludedSites.length === 0 ? (
+              <p className="text-xs text-slate-400">No excluded sites.</p>
+            ) : (
+              <div className="max-h-28 space-y-1 overflow-y-auto">
+                {excludedSites.map((site) => (
+                  <div
+                    key={site}
+                    className="flex items-center justify-between gap-2 rounded-md border border-slate-700/70 bg-slate-900/70 px-2 py-1"
+                  >
+                    <span className="truncate text-xs text-slate-200">{site}</span>
+                    <button
+                      type="button"
+                      onClick={() => void handleRemoveExcludedSite(site)}
+                      className="text-xs font-medium text-rose-300 hover:text-rose-200"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="popup-card space-y-3">
+          <div>
+            <h2 className="popup-section-title">Cache</h2>
+            <p className="popup-section-subtitle">
+              {cacheEntries} file(s), {formatBytes(cacheBytes)} used of {budgetMb} MB budget.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleClearCache()}
+            disabled={clearingCache}
+            className="popup-secondary-button w-full justify-center"
+          >
+            {clearingCache ? "Clearing..." : "Clear audio cache"}
+          </button>
+        </section>
+
+        <section className="popup-card space-y-3">
+          <div>
+            <h2 className="popup-section-title">API key</h2>
+            <p className="popup-section-subtitle">Connected key: ••••{apiKey.slice(-4)}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleRemoveKey()}
+            className="text-left text-xs font-medium text-rose-300 hover:text-rose-200"
+          >
+            Remove
+          </button>
+        </section>
       </div>
     </div>
   );

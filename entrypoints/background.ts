@@ -1,42 +1,51 @@
 import { browser } from "#imports";
 
 export default defineBackground(() => {
-  let offscreenCreated = false;
+  const chromeApi = (globalThis as typeof globalThis & { chrome: any }).chrome;
+
+  function requestStopForTab(tabId: number): void {
+    browser.runtime
+      .sendMessage({ target: "offscreen", action: "stopForTab", tabId })
+      .catch(() => {});
+  }
 
   async function ensureOffscreen() {
-    if (offscreenCreated) return;
+    try {
+      const contexts = await chromeApi.runtime.getContexts({
+        contextTypes: ["OFFSCREEN_DOCUMENT"],
+        documentUrls: [chromeApi.runtime.getURL("offscreen.html")],
+      });
+      if (Array.isArray(contexts) && contexts.length > 0) {
+        return;
+      }
+    } catch {
+      // Fall through to best-effort creation below.
+    }
 
     try {
-      // @ts-expect-error - offscreen API types not in webextension-polyfill
-      await chrome.offscreen.createDocument({
+      await chromeApi.offscreen.createDocument({
         url: "offscreen.html",
-        // @ts-expect-error - offscreen API types not in webextension-polyfill
-        reasons: [chrome.offscreen.Reason.AUDIO_PLAYBACK],
+        reasons: [chromeApi.offscreen.Reason.AUDIO_PLAYBACK],
         justification: "Playing TTS audio",
       });
-      offscreenCreated = true;
     } catch (err) {
-      // Document might already exist
-      if (!(err as Error).message.includes("already exists")) {
+      const message = (err as Error).message;
+      if (
+        !message.includes("already exists") &&
+        !message.includes("Only a single offscreen document may be created")
+      ) {
         throw err;
       }
-      offscreenCreated = true;
     }
   }
 
   // Forward messages from offscreen to content scripts
-  browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.source === "offscreen") {
-      console.log("[Background] Forwarding offscreen event:", message.event);
-      // Broadcast to all tabs
-      browser.tabs.query({}).then((tabs) => {
-        console.log("[Background] Broadcasting to", tabs.length, "tabs");
-        for (const tab of tabs) {
-          if (tab.id) {
-            browser.tabs.sendMessage(tab.id, message).catch(() => {});
-          }
-        }
-      });
+      const tabId = typeof message.tabId === "number" ? message.tabId : undefined;
+      if (typeof tabId === "number") {
+        browser.tabs.sendMessage(tabId, message).catch(() => {});
+      }
       return;
     }
 
@@ -52,8 +61,9 @@ export default defineBackground(() => {
       if (message.action === "toOffscreen") {
         ensureOffscreen()
           .then(() => {
+            const tabId = sender.tab?.id;
             browser.runtime.sendMessage(
-              { target: "offscreen", ...message.data }
+              { target: "offscreen", ...message.data, tabId }
             )
               .then(sendResponse)
               .catch((err) => sendResponse({ success: false, error: (err as Error).message }));
@@ -62,5 +72,14 @@ export default defineBackground(() => {
         return true;
       }
     }
+  });
+
+  browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (changeInfo.status !== "loading") return;
+    requestStopForTab(tabId);
+  });
+
+  browser.tabs.onRemoved.addListener((tabId) => {
+    requestStopForTab(tabId);
   });
 });
